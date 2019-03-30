@@ -159,10 +159,12 @@ static int httpsqs_read_getpos(const char* httpsqs_input_name)
 static int httpsqs_read_maxqueue(const char* httpsqs_input_name) {
 	int queue_value = 0;
 	char *queue_value_tmp;
-	char queue_name[300] = {0}; /* 队列名称的总长度，用户输入的队列长度少于256字节 */
+	char queue_name[300] = {0}; /* 队列名称的总长度，用户输入的队列名字长度少于256字节。那你申请256 + strlen("macqueue") + 1 = 265个就可以了，申请300个干嘛 */
 	
 	sprintf(queue_name, "%s:%s", httpsqs_input_name, "maxqueue");
-	
+
+	// 每个队列的最大长度保存在队列中，为啥是string类型的呢，是觉得能够节省空间吗，
+	// 当队列的长度超过四位数之后好像并不能，而且每次都还要经过一次类型转换
 	queue_value_tmp = tcbdbget2(httpsqs_db_tcbdb, queue_name);
 	if(queue_value_tmp) {
 		queue_value = atoi(queue_value_tmp);
@@ -295,8 +297,7 @@ static int httpsqs_now_putpos(const char* httpsqs_input_name) {
 }
 
 /* 获取本次“出队列”操作的队列读取点，返回值为0时队列全部读取完成 */
-static int httpsqs_now_getpos(const char* httpsqs_input_name)
-{
+static int httpsqs_now_getpos(const char* httpsqs_input_name) {
 	int maxqueue_num = 0;
 	int queue_put_value = 0;
 	int queue_get_value = 0;
@@ -304,7 +305,7 @@ static int httpsqs_now_getpos(const char* httpsqs_input_name)
 	
 	/* 获取最大队列数量 */
 	maxqueue_num = httpsqs_read_maxqueue(httpsqs_input_name);
-	
+
 	/* 读取当前队列写入位置点 */
 	queue_put_value = httpsqs_read_putpos(httpsqs_input_name);
 	

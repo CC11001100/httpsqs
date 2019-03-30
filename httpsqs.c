@@ -2,6 +2,10 @@
 HTTP Simple Queue Service - httpsqs v1.7
 Author: Zhang Yan (http://blog.s135.com), E-mail: net@s135.com
 This is free software, and you are welcome to modify and redistribute it under the New BSD License
+
+
+碉堡在此： https://linux.die.net/man/3/tcbdb
+
 */
 
 #include <sys/types.h>
@@ -119,9 +123,8 @@ char *urldecode(char *input_str)
         return str; 
 }
 
-/* 读取队列写入点的值 */
-static int httpsqs_read_putpos(const char* httpsqs_input_name)
-{
+/* 读取队列写入点的值，写入点的位置在数据库中使用${队列名}:putpos的key来存储 */
+static int httpsqs_read_putpos(const char* httpsqs_input_name) {
 	int queue_value = 0;
 	char *queue_value_tmp;
 	char queue_name[300] = {0}; /* 队列名称的总长度，用户输入的队列长度少于256字节 */
@@ -159,7 +162,7 @@ static int httpsqs_read_getpos(const char* httpsqs_input_name)
 static int httpsqs_read_maxqueue(const char* httpsqs_input_name) {
 	int queue_value = 0;
 	char *queue_value_tmp;
-	char queue_name[300] = {0}; /* 队列名称的总长度，用户输入的队列名字长度少于256字节。那你申请256 + strlen("macqueue") + 1 = 265个就可以了，申请300个干嘛 */
+	char queue_name[300] = {0}; /* 队列名称的总长度，用户输入的队列名字长度少于256字节。那你申请256 + strlen("macqueue") + 1 + 1 = 266个就可以了，申请300个干嘛 */
 	
 	sprintf(queue_name, "%s:%s", httpsqs_input_name, "maxqueue");
 
@@ -177,8 +180,7 @@ static int httpsqs_read_maxqueue(const char* httpsqs_input_name) {
 }
 
 /* 设置最大的队列数量，返回值为设置的队列数量。如果返回值为0，则表示设置取消（取消原因为：设置的最大的队列数量小于”当前队列写入位置点“和”当前队列读取位置点“，或者”当前队列写入位置点“小于”当前队列的读取位置点） */
-static int httpsqs_maxqueue(const char* httpsqs_input_name, int httpsqs_input_num)
-{
+static int httpsqs_maxqueue(const char* httpsqs_input_name, int httpsqs_input_num) {
 	int queue_put_value = 0;
 	int queue_get_value = 0;
 	int queue_maxnum_int = 0;
@@ -209,8 +211,7 @@ static int httpsqs_maxqueue(const char* httpsqs_input_name, int httpsqs_input_nu
 }
 
 /* 重置队列，0表示重置成功 */
-static int httpsqs_reset(const char* httpsqs_input_name)
-{
+static int httpsqs_reset(const char* httpsqs_input_name) {
 	char queue_name[300] = {0}; /* 队列名称的总长度，用户输入的队列长度少于256字节 */
 	
 	sprintf(queue_name, "%s:%s", httpsqs_input_name, "putpos");
@@ -270,14 +271,15 @@ static int httpsqs_now_putpos(const char* httpsqs_input_name) {
 	queue_get_value = httpsqs_read_getpos(httpsqs_input_name);	
 	
 	sprintf(queue_name, "%s:%s", httpsqs_input_name, "putpos");	
-	
+
+	// 使用循环队列
 	/* 队列写入位置点加1 */
 	queue_put_value = queue_put_value + 1;
 	if (queue_put_value == queue_get_value) {
 	    /* 如果队列写入ID+1之后追上队列读取ID，则说明队列已满，返回0，拒绝继续写入 */
 		queue_put_value = 0;
 	}
-	/* 如果队列写入ID大于最大队列数量，并且从未进行过出队列操作（=0）或进行过1次出队列操作（=1），返回0，拒绝继续写入 */
+	/* 如果队列写入ID大于最大队列数量，并且从未进行过出队列操作（=0）或进行过1次出队列操作（=1），说明队列已经满了，返回0，拒绝继续写入 */
 	else if (queue_get_value <= 1 && queue_put_value > maxqueue_num) {
 		queue_put_value = 0;
 	}
@@ -287,9 +289,11 @@ static int httpsqs_now_putpos(const char* httpsqs_input_name) {
 			queue_put_value = 1;
 		}
 	}
+	// TODO 此处是否有逻辑错误，队列写入点重置为1之后并没有写回数据库，这会导致以后每次都会写入到1位置
 	/* 队列写入位置点加1后的值，回写入数据库 */
 	else {
 		sprintf(queue_input, "%d", queue_put_value);
+		// 每个队列当前写入点的位置以queue_name=write_point的形式保存在数据库中
 		tcbdbput2(httpsqs_db_tcbdb, queue_name, (char *)queue_input);
 	}
 	
@@ -759,7 +763,7 @@ int main(int argc, char *argv[], char *envp[])
 	tcbdbtune(httpsqs_db_tcbdb, 1024, 2048, 50000000, 8, 10, BDBTLARGE);
 	tcbdbsetcache(httpsqs_db_tcbdb, httpsqs_settings_cacheleaf, httpsqs_settings_cachenonleaf);
 	tcbdbsetxmsiz(httpsqs_db_tcbdb, httpsqs_settings_mappedmemory); /* 内存缓存大小 */
-					
+
 	/* 判断表是否能打开 */
 	if(!tcbdbopen(httpsqs_db_tcbdb, httpsqs_settings_dataname, BDBOWRITER|BDBOCREAT)){
 		show_help();
@@ -846,11 +850,11 @@ int main(int argc, char *argv[], char *envp[])
 	signal(SIGPIPE, SIG_IGN);
 	
 	/* 处理kill信号 */
-	signal (SIGINT, kill_signal_worker);
-	signal (SIGKILL, kill_signal_worker);
-	signal (SIGQUIT, kill_signal_worker);
-	signal (SIGTERM, kill_signal_worker);
-	signal (SIGHUP, kill_signal_worker);
+	signal(SIGINT, kill_signal_worker);
+	signal(SIGKILL, kill_signal_worker);
+	signal(SIGQUIT, kill_signal_worker);
+	signal(SIGTERM, kill_signal_worker);
+	signal(SIGHUP, kill_signal_worker);
 	
     /* 处理段错误信号 */
     signal(SIGSEGV, kill_signal_worker);	
